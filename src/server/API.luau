@@ -400,7 +400,7 @@ local function getNewestEntry(Player: ValidPlayer, storeName: ValidStores)
 	local isInServer = playerInServer(userId)
 
 	if isInServer then
-		debugPrint(`Player {Player} is in the server - getting stat folder`)
+		debugPrint(`Player {Player}: {storeName}`)
 
 		if not storeIsServed(storeName) then
 			debugPrint(`Store {storeName} is cold-only - getting datastore`)
@@ -444,12 +444,12 @@ local function updateNewestEntryData(Player: ValidPlayer, storeName: ValidStores
 	local servedStore = storeIsServed(storeName)
 
 	if isInServer and servedStore then
-		debugPrint(`Player {Player} is in the server - updating stat folder`)
+		debugPrint(`H | Player {Player}: {storeName} -> {keyName}: {newData}`)
 
 		--- Update stat information
 		return setPlayerStat(Player, storeName, keyName, newData)
 	else
-		debugPrint(`Player {Player} is not in the server - updating datastore`)
+		debugPrint(`C | Player {Player}: {storeName} -> {keyName}: {newData}`)
 
 		--- Update datastore information
 		return setPlayerEntryData(Player, storeName, keyName, newData)
@@ -489,7 +489,7 @@ local function updateNewestOrderedEntry(Player: ValidPlayer, storeName: ValidSto
 	local isInServer = playerInServer(userId)
 
 	if isInServer then
-		debugPrint(`Player {Player} is in the server - updating stat folder`)
+		debugPrint(`H | Player {Player}: {storeName} -> {newData}`)
 
 		local value = getPlayerDataFolderStore(userId, storeName)
 		if not value or not value:IsA("ValueBase") then
@@ -501,7 +501,7 @@ local function updateNewestOrderedEntry(Player: ValidPlayer, storeName: ValidSto
 
 		return true
 	else
-		debugPrint(`Player {Player} is not in the server - updating datastore`)
+		debugPrint(`C | Player {Player}: {storeName} -> {newData}`)
 
 		return setPlayerEntry(Player, storeName, newData)
 	end
@@ -519,7 +519,7 @@ local function incrementNewestOrderedEntry(Player: ValidPlayer, storeName: Valid
 	local isInServer = playerInServer(userId)
 
 	if isInServer then
-		debugPrint(`Player {Player} is in the server - updating stat folder`)
+		debugPrint(`H | Player {Player}: {storeName} -> {newAmount}`)
 
 		local value = getPlayerDataFolderStore(userId, storeName)
 		if not value or not value:IsA("ValueBase") then
@@ -532,7 +532,7 @@ local function incrementNewestOrderedEntry(Player: ValidPlayer, storeName: Valid
 
 		return value.Value
 	else
-		debugPrint(`Player {Player} is not in the server - updating datastore`)
+		debugPrint(`C | Player {Player}: {storeName} -> {newAmount}`)
 		local Store = Core.getStore(storeName)
 		local _, amount = Store:GetEntry(userId)
 		setPlayerEntry(Player, storeName, amount + newAmount)

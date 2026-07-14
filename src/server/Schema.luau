@@ -111,6 +111,18 @@ local function deepMerge(defaults: { [any]: any }, overrides: { [any]: any }): {
 			result[key] = value
 		end
 	end
+
+	-- Preserve keys that only exist in overrides (e.g. custom loadout names
+	-- the player created that aren't part of the schema defaults).
+	for key, overrideValue in pairs(overrides) do
+		if key == "_served" then
+			continue
+		end
+		if result[key] == nil then
+			result[key] = overrideValue
+		end
+	end
+
 	return result
 end
 

@@ -60,6 +60,10 @@ local LOAD_ATTEMPTS: number = 8
 --- Released after data folder is created
 local loadQueued: { number } = {}
 
+--- Tracks which players have already been saved to prevent duplicate saves
+--- (e.g. PlayerRemoving fires then BindToClose fires for the same player)
+local savedPlayers: { [number]: boolean } = {}
+
 --- A list of number values that get copied to the player's leaderstats
 --- when changed
 local replicatedLeaderStatValues: { string } = { "Kills", "Deaths", "Level", "Credits" }
@@ -248,15 +252,17 @@ local function attemptDataSave(playerId: number, playerDataFolder: Folder): bool
 	return true
 end
 
---- Attempts (several times if failure) to save all player data
+--- Synchronously attempts to save all player data with retries.
+--- Returns true on success, false if all attempts failed.
 --- @param Player Player the player to save data for
-local function savePlayerData(Player: Player)
+--- @return boolean success whether the save succeeded
+local function saveWithRetries(Player: Player): boolean
 	local userId = Player.UserId
 	local data = Player:FindFirstChild("Data") :: Folder
 
 	if not data then
 		debugWarn("Player had no data folder to save in the first place - coward")
-		return
+		return false
 	end
 
 	--- If for some reason the player dissapears we won't forget what their data is, we clean it later
@@ -264,26 +270,33 @@ local function savePlayerData(Player: Player)
 
 	debugPrint("Saving player data " .. tostring(Player) .. " - remembered their data folder")
 
+	for attempt = 1, SAVE_ATTEMPTS do
+		debugPrint("Attempt", attempt)
+		if attemptDataSave(userId, playerDataFolder) then
+			debugPrint(`Successfully saved data for {Player.Name}`)
+			return true
+		end
+
+		local waitTime = math.pow(2, attempt) * 0.2 -- 0.2s, 0.4s, 0.8s, etc.
+		debugWarn(`Attempt {attempt} failed to save data for {Player.Name}, retrying in {waitTime} seconds`)
+		task.wait(waitTime)
+	end
+
+	debugError(`All attempts failed to save data for {Player.Name}`)
+	playerDataFolder:Destroy() -- sound scary but dont panic
+	return false
+end
+
+--- Attempts to save a player's data asynchronously (fire-and-forget).
+--- @param Player Player the player to save data for
+local function savePlayerData(Player: Player)
+	if savedPlayers[Player.UserId] then
+		return
+	end
+	savedPlayers[Player.UserId] = true
+
 	task.spawn(function()
-		local success = false
-		for attempt = 1, SAVE_ATTEMPTS do
-			debugPrint("Attempt", attempt)
-			if attemptDataSave(userId, playerDataFolder) then
-				debugPrint(`Successfully saved data for {Player.Name}`)
-				success = true
-				break
-			end
-
-			local waitTime = math.pow(2, attempt) * 0.2 -- 0.2s, 0.4s, 0.8s, etc.
-			debugWarn(`Attempt {attempt} failed to save data for {Player.Name}, retrying in {waitTime} seconds`)
-			task.wait(waitTime)
-		end
-
-		if success then
-			return
-		end
-		debugError(`All attempts failed to save data for {Player.Name}`)
-		playerDataFolder:Destroy() -- sound scary but dont panic
+		saveWithRetries(Player)
 	end)
 end
 
@@ -590,6 +603,7 @@ local function supplementPlayerGamemodeData(userId: number)
 
 	local flatFolder = dataFolder:FindFirstChild("FlatData") :: Folder?
 	local orderedFolder = dataFolder:FindFirstChild("OrderedData") :: Folder?
+	local layeredFolder = dataFolder:FindFirstChild("LayeredData") :: Folder?
 	if not flatFolder or not orderedFolder then
 		return
 	end
@@ -597,6 +611,7 @@ local function supplementPlayerGamemodeData(userId: number)
 	local ORDERED_STORES = Core.getAllOrderedStores()
 	local FLAT_STORES = Core.getAllFlatStores()
 	local COLD_STORES = Core.getAllColdStores()
+	local LAYERED_STORES = Core.getAllLayeredStores()
 
 	local function ensureStoreEntry(store: Store, defaultValue: any)
 		if Core.storeEntryExists(store.name, userId) then
@@ -642,6 +657,28 @@ local function supplementPlayerGamemodeData(userId: number)
 			local scheme = Schema.getSchemaForStore(store.name)
 			Core.updateStoreEntry(store.name, userId, scheme)
 			debugPrint("Supplemented cold store", store.name, "for", Player.Name)
+		end
+	end
+
+	-- Supplement layered stores (e.g. Inventory) so gamemode-specific loadout
+	-- data is available even for players who joined before the gamemode attribute was set.
+	if layeredFolder then
+		for _, store: Store in ipairs(LAYERED_STORES) do
+			if not layeredFolder:FindFirstChild(store.name) then
+				local scheme = Schema.getSchemaForStore(store.name)
+				ensureStoreEntry(store, scheme)
+
+				local success, result = store:GetEntry(userId)
+				if not success then
+					debugWarn("Unable to load layered store", store.name, "during supplement for", Player.Name)
+					continue
+				end
+
+				local merged = Schema.deepMerge(scheme, result or {})
+				local folder = Schema.constructFolderFromEntryTable(store.name, merged)
+				folder.Parent = layeredFolder
+				debugPrint("Supplemented layered store", store.name, "for", Player.Name)
+			end
 		end
 	end
 end
@@ -692,9 +729,34 @@ LoadClientData.OnServerEvent:Connect(loadPlayerData)
 
 --- Save all player data
 game:BindToClose(function()
+	local saveCount = 0
+	local allDone = false
+
 	for _, Player in Players:GetPlayers() do
-		savePlayerData(Player)
+		if not savedPlayers[Player.UserId] then
+			savedPlayers[Player.UserId] = true
+			saveCount += 1
+			task.spawn(function()
+				saveWithRetries(Player)
+				saveCount -= 1
+				if saveCount == 0 then
+					allDone = true
+				end
+			end)
+		end
 	end
+
+	if saveCount == 0 then
+		allDone = true
+	end
+
+	-- Wait for all saves to complete, up to 30 seconds
+	local deadline = os.clock() + 30
+	while not allDone and os.clock() < deadline do
+		task.wait(0.1)
+	end
+
+	print("Data API has finished saving data")
 end)
 
 Players.PlayerRemoving:Connect(playerLeft)
