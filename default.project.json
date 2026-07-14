@@ -1,0 +1,26 @@
+{
+  "name": "dataapi",
+  "tree": {
+    "$className": "DataModel",
+
+    "ServerScriptService": {
+      "DataAPI": {
+        "$path": "src/server"
+      }
+    },
+
+    "StarterPlayer": {
+      "StarterPlayerScripts": {
+        "Datastore": {
+          "$path": "src/client"
+        }
+      }
+    },
+
+    "Workspace": {
+      "$properties": {
+        "FilteringEnabled": true
+      }
+    }
+  }
+}

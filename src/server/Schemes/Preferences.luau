@@ -1,0 +1,17 @@
+return {
+	_version = "1.1.0",
+	_served = true,
+	_uniquePerGamemode = false,
+	SunRays = true,
+	CameraSway = true,
+	Materials = true,
+	PermaDay = false,
+	DoomMusic = true,
+	ShowDamageAmount = true,
+	HealthBars = true,
+	DepthOfField = true,
+	KillFeed = true,
+	Shadows = true,
+	LevelBar = true,
+	ShowNamePlate = false,
+}
