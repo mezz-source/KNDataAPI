@@ -53,7 +53,7 @@ Module._meta = {
 ----------------------------------------------------------------------------------
 
 --- The max amount of times to attempt to save a players data, if it fails
-local SAVE_ATTEMPTS: number = 5
+local SAVE_ATTEMPTS: number = 20
 local LOAD_ATTEMPTS: number = 8
 
 --- A list of IDs whose currently in the process of being loaded
@@ -67,6 +67,12 @@ local savedPlayers: { [number]: boolean } = {}
 --- A list of number values that get copied to the player's leaderstats
 --- when changed
 local replicatedLeaderStatValues: { string } = { "Kills", "Deaths", "Level", "Credits" }
+
+--- Minimum seconds between manual mid-game saves per player
+local MANUAL_SAVE_COOLDOWN: number = 120
+
+--- Tracks the last time each player triggered a manual save (os.clock timestamp)
+local lastManualSave: { [number]: number } = {}
 
 --[[----------------------------------------------------------------------------------
 
@@ -298,6 +304,68 @@ local function savePlayerData(Player: Player)
 	task.spawn(function()
 		saveWithRetries(Player)
 	end)
+end
+
+export type ThrottledSaveResult = {
+	Success: boolean,
+	Reason: string?,
+	CooldownRemaining: number?,
+}
+
+--- Attempts to save a player's data while they are still in the server.
+--- Rate-limited per player by MANUAL_SAVE_COOLDOWN seconds.
+--- Does NOT set the savedPlayers flag so the normal leave-save still fires.
+--- @param Player Player the player to save data for
+--- @return ThrottledSaveResult result detailed outcome of the save attempt
+local function throttledSave(Player: Player): ThrottledSaveResult
+	local userId = Player.UserId
+	local now = os.clock()
+
+	local lastSave = lastManualSave[userId]
+	if lastSave then
+		local elapsed = now - lastSave
+		if elapsed < MANUAL_SAVE_COOLDOWN then
+			local remaining = math.ceil(MANUAL_SAVE_COOLDOWN - elapsed)
+			debugPrint(`Manual save throttled for {Player.Name}, {remaining}s remaining`)
+			return {
+				Success = false,
+				Reason = "Throttled",
+				CooldownRemaining = remaining,
+			}
+		end
+	end
+
+	local data = Player:FindFirstChild("Data") :: Folder?
+	if not data then
+		return {
+			Success = false,
+			Reason = "NoDataFolder",
+		}
+	end
+
+	local playerDataFolder = data:Clone()
+	debugPrint("Manual save: cloned data folder for " .. Player.Name)
+
+	for attempt = 1, SAVE_ATTEMPTS do
+		if attemptDataSave(userId, playerDataFolder) then
+			lastManualSave[userId] = os.clock()
+			debugPrint(`Manual save succeeded for {Player.Name}`)
+			return {
+				Success = true,
+			}
+		end
+
+		local waitTime = math.pow(2, attempt) * 0.2
+		debugWarn(`Manual save attempt {attempt} failed for {Player.Name}, retrying in {waitTime}s`)
+		task.wait(waitTime)
+	end
+
+	playerDataFolder:Destroy()
+	debugError(`Manual save: all {SAVE_ATTEMPTS} attempts failed for {Player.Name}`)
+	return {
+		Success = false,
+		Reason = "AllAttemptsFailed",
+	}
 end
 
 --- Attempts to read and insert the values from the player's datastores
@@ -558,15 +626,15 @@ local function loadPlayerData(Player: Player)
 				setupPlayerLeaderStats(Player, data)
 			end
 
-			--- Check if not migrated yet
-			if not API.getPlayerFlag(Player, "OldDataMigrated") then
-				-- This won't do anything unless they have old data in the first place
-				migrateOldData(Player)
+			----- Check if not migrated yet
+			--if not API.getPlayerFlag(Player, "OldDataMigrated") then
+			--	-- This won't do anything unless they have old data in the first place
+			--	migrateOldData(Player)
 
-				--- Prevents this from tripping later
-				API.setPlayerFlag(Player, "OldDataMigrated", true)
-				warn("Migrated data")
-			end
+			--	--- Prevents this from tripping later
+			--	API.setPlayerFlag(Player, "OldDataMigrated", true)
+			--	warn("Migrated data")
+			--end
 
 			return
 		end
@@ -578,6 +646,7 @@ local function loadPlayerData(Player: Player)
 end
 
 local function playerLeft(Player: Player)
+	lastManualSave[Player.UserId] = nil
 	savePlayerData(Player)
 end
 
@@ -727,6 +796,23 @@ local DatastoreEvents = ReplicatedStorage:WaitForChild("Datastore")
 local LoadClientData = DatastoreEvents:WaitForChild("LoadClientData")
 LoadClientData.OnServerEvent:Connect(loadPlayerData)
 
+DatastoreEvents:WaitForChild("savePlayerData").OnServerInvoke = function(Player: Player)
+	local result = throttledSave(Player)
+	return result
+end
+
+DatastoreEvents:WaitForChild("saveAvailable").OnServerInvoke = function(Player: Player)
+	local userId = Player.UserId
+	local lastSave = lastManualSave[userId]
+	if lastSave then
+		local elapsed = os.clock() - lastSave
+		if elapsed < MANUAL_SAVE_COOLDOWN then
+			return { ["ok"] = false }
+		end
+	end
+	return { ["ok"] = true }
+end
+
 --- Save all player data
 game:BindToClose(function()
 	local saveCount = 0
@@ -772,5 +858,6 @@ Players.PlayerRemoving:Connect(playerLeft)
 --- Calling module.test() will test a function of the module
 Module.start = start
 Module.test = test
+Module.throttledSave = throttledSave
 
 return Module
